@@ -1,0 +1,26 @@
+{
+  "name": "serverless-offline-step-functions",
+  "version": "0.0.0",
+  "description": "plugin to support step functions",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flocasts/serverless-offline-step-functions.git"
+  },
+  "author": "Justin Kruse",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/flocasts/serverless-offline-step-functions/issues"
+  },
+  "homepage": "https://github.com/flocasts/serverless-offline-step-functions#readme",
+  "dependencies": {
+    "lodash": "^4.17.11",
+    "serverless": "^1.32.0"
+  },
+  "devDependencies": {
+    "serverless-offline": "^3.31.2"
+  }
+}
