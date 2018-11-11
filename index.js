@@ -8,7 +8,7 @@ class ServerlessPlugin {
     this.options = options;
 
     this.hooks = {
-      'before:offline:init': this.setupRoutes.bind(this),
+      'before:offline:init': this.createEndpoints.bind(this),
     };
   }
 
