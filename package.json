@@ -1,6 +1,6 @@
 {
   "name": "serverless-offline-step-functions",
-  "version": "0.0.0",
+  "version": "0.0.2",
   "description": "plugin to support step functions",
   "main": "index.js",
   "scripts": {
@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/flocasts/serverless-offline-step-functions#readme",
   "dependencies": {
+    "bluebird": "^3.5.3",
     "lodash": "^4.17.11",
     "serverless": "^1.32.0"
   },
