@@ -11,140 +11,100 @@ class ServerlessPlugin {
     this.options = options;
     this.logPrefix = '[Offline Step Functions] ';
     // TODO: add config?
-    this.handlersDirectory = './offline-step-functions';
+    this.handlersDirectory = `${__dirname}/src`;
 
     this.hooks = {
       'before:offline:start:init': () =>
         Promise.bind(this)
         .then(this.parseYaml)
-        .then(this.createEndpoints),
+        .then(this.createEndpoints)
+        .then(this.createStepFunctionsJSON),
     };
   }
 
   /**
    * For each statemachine, set up the appropriate endpoint resource to kick off
    * the execution of the state machine and generate a handler file for the endpoint
+   * A custom request template is used to send the state machine name and starting
+   * state's name to the lambda's execution
    */
   createEndpoints() {
     const functions = this.serverless.service.functions;
     _.forEach(this.serverless.service.stepFunctions.stateMachines, (stateMachine, stateMachineName) => {
-        const newFn = {};
-        const firstFnArn = stateMachine.definition.States[stateMachine.definition.StartAt].Resource;
-        const lambdaName = this.serverless.providers.aws.naming.extractLambdaNameFromArn(firstFnArn);
-        const functionName = `${lambdaName}StepFunction${Date.now()}`;
+        _.forEach(stateMachine.definition.States, (state, stateName) => {
+            if (state.Type === 'Task') {
+                const lambdaName = this.serverless.providers.aws.naming.extractLambdaNameFromArn(state.Resource);
 
-        newFn.events = stateMachine.events;
-        this.serverless.cli.log(`${this.logPrefix} created ${functionName}`);
+                // store the lambda function handler in the state for reference in the JSON file
+                // it will be used to call the proper handler code when executing the fucntion
+                // as part of the state machine
+                state.handler = functions[lambdaName].handler;
+                if (stateName === stateMachine.definition.StartAt) {
+                    // create a new function for an endpoint and
+                    // give it a unique name
+                    const newFn = {};
+                    const functionName = `${lambdaName}StepFunction${Date.now()}`;
 
-        // generate the handler file
-        this.createHandlerFile(stateMachine, stateMachineName);
-        newFn.handler = `${this.handlersDirectory}/${stateMachineName}Handler.steps`;
+                    // give the new function the same events as it's state machine twin
+                    newFn.events = Object.assign([], stateMachine.events);
 
-        // add to serverless functions
-        functions[functionName] = newFn;
+                    // set the handler to the generic state machine handler function
+                    newFn.handler = `./node_modules/serverless-offline-step-functions/src/state-machine-handler.run`;
+                    _.forEach(newFn.events, (event) => {
+                        if (event.http) {
+                            event.http.integration = 'lambda';
+                            event.http.request = {
+                                headers: {
+                                    'Content-type': 'application/json'
+                                },
+                                // this custom template copies (most of) the default template
+                                // but also sends the state name and state machine name
+                                // TODO: use a file, but need to figure out how to input
+                                // TODO:  the stateName, stateMachine name into the file
+                                template: {
+                                    'application/json': `{
+                                        "headers": "$input.params().header",
+                                        "stateName": "${stateMachine.definition.StartAt}",
+                                        "stateMachine": "${stateMachineName}",
+                                        "path": "$input.params().path",
+                                        "query": "$input.params().querystring",
+                                        "body": "$input.body"
+                                    }`,
+                                    },
+                            };
+
+                            // needed to include response headers otherwise sls offline threw an error:
+                            // TypeError: Uncaught error: Cannot read property 'headers' of undefined
+                            event.http.response = {
+                                headers: {
+                                    'Content-type': 'application/json',
+                                },
+                            };
+                        }
+                    });
+
+                    // add to serverless functions
+                    functions[functionName] = newFn;
+                    this.serverless.cli.log(`${this.logPrefix} created ${functionName}`);
+                }
+            }
+        });
     });
+
+
   }
 
   /**
-   * Creates the handler file for new endpoints
-   * @param {*} stateMachine
-   * @param {*} stateMachineName
+   * Creates a JSON file for reference during the state machine execution
    */
-  createHandlerFile(stateMachine, stateMachineName) {
-    const stateInfo = [];
-    const functions = this.serverless.service.functions;
-    let currentState = stateMachine.definition.States[stateMachine.definition.StartAt];
-    _.forEach(stateMachine.definition.States, () => {
-        const currLambdaName = this.serverless.providers.aws.naming.extractLambdaNameFromArn(currentState.Resource);
-        stateInfo.push({
-            handler: functions[currLambdaName].handler,
-            OutputPath: currentState.OutputPath
-        });
-
-        if (currentState.Next) {
-            currentState = stateMachine.definition.States[currentState.Next];
-        }
-    });
-
-
-    const fileData = `
-        const child_process = require('child_process');
-
-        module.exports.steps = (event, context, callback) => {
-            spawnProcess(${JSON.stringify(stateInfo)}, 0, event, context, callback)
-        }
-
-        function spawnProcess(stateInfo, index, event, context, callback) {
-            const handlerSplit = stateInfo[index].handler.split('.');
-            const outputPath = stateInfo[index].OutputPath;
-            const child = child_process.spawn('node',
-                ['-e',
-                \`require("./\${handlerSplit[0]}").\${handlerSplit[1]}(JSON.parse(process.env.event), JSON.parse(process.env.context)).then((data) => { console.log(data)})\`,
-                '-'],
-                { stdio: 'pipe',
-                env: Object.assign({}, process.env, {
-                    event: JSON.stringify(event),
-                    context: JSON.stringify(context)
-                })});
-
-                let outputData = null;
-                child.stdout.on('data', (data) => {
-                    if (Buffer.isBuffer(data)) {
-                        data = data.toString().trim();
-                    }
-
-                    outputData = data;
-                });
-                child.stderr.on('data', (data) => {
-                    console.log('[offline step functions] Error: ', data.toString());
-                });
-
-                child.on('exit', () => {
-                    event = event || {};
-                    event.input = event.input || {};
-                    event.input.$ = event.input.$ || {};
-                    try {
-                        if (outputPath) {
-                            event.input.$[outputPath] = JSON.parse(outputData);
-                        } else {
-                            event.input.$ = JSON.parse(outputData);
-                        }
-                    } catch {
-                        if (outputPath) {
-                            event.input.$[outputPath] = outputData;
-                        } else {
-                            event.input.$ = outputData;
-                        }
-                    }
-
-                    // if the last one, return the data
-                    // TODO: check this functionality with AWS docs
-                    if (index === stateInfo.length - 1) {
-                        return callback(null, {
-                            statusCode: 200,
-                            body: outputData,
-                        });
-                    }
-
-                    index += 1;
-                    spawnProcess(stateInfo, index, event, context, callback);
-                });
-        }
-        `
-
-        // create the handler file
-        try {
-            fs.writeFileSync(`${this.handlersDirectory}/${stateMachineName}Handler.js`, fileData);
-        } catch(e) {
-            console.log('e: ', e);
-            //directory didn't exist
-            if (e.code === 'ENOENT') {
-                fs.mkdirSync(this.handlersDirectory);
-                fs.writeFileSync(`${this.handlersDirectory}/{stateMachineName}Handler.js`, fileData);
-            }
-        }
+  createStepFunctionsJSON() {
+    fs.writeFileSync(`${this.handlersDirectory}/step-functions.json`, JSON.stringify(this.serverless.service.stepFunctions));
   }
 
+  /**
+   * Adds the step function configuration to the serverless config
+   * @author serverless-step-functions
+   */
   parseYaml() {
     const servicePath = this.serverless.config.servicePath;
     if (!servicePath) {
