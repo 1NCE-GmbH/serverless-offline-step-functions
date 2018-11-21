@@ -22,18 +22,11 @@ class StateMachineExecutor {
     spawnProcess(stateInfo, event, context, callback) {
         this.callback = callback;
         const outputPath = stateInfo.OutputPath;
-        const nodeOptsArr = [
-            '-e',
-            this.whatToRun(stateInfo)];
-
-        if(stateInfo.Type.toLowerCase() !== 'wait') {
-            nodeOptsArr.push('-');
-        }
 
         const child = child_process.spawn('node',
         [
             '-e',
-            this.whatToRun(stateInfo)],
+            this.whatToRun(stateInfo, event)],
             { stdio: 'pipe',
             env: Object.assign({}, process.env, {
                 event: JSON.stringify(event),
@@ -43,7 +36,7 @@ class StateMachineExecutor {
             let outputData = null;
             child.stdout.on('data', (data) => {
                 if (Buffer.isBuffer(data) && ['fail', 'pass', 'success', 'wait'].indexOf(stateInfo.Type.toLowerCase()) < 0) {
-                    data = JSON.parse(data.toString().trim());
+                    data = data.toString().trim();
                 }
 
                 outputData = data;
@@ -53,29 +46,22 @@ class StateMachineExecutor {
             });
 
             child.on('exit', () => {
+                const newEvent = event ? Object.assign({}, event) : {};
+
+                // any state except the fail state may have output
+                if(stateInfo.Type !== 'Fail') {
+                    this.processResult(event, stateInfo, outputData);
+
+                    // if OutputPath is **NOT** specified, the entire (original) input is set to output
+                    // if OutputPath is specified, only the specified node (from the input) is returned
+                    jsonPath({ json: event.input, path: outputPath || '$', callback: (data) =>{
+                        event.output = Object.assign({}, data);
+                    }});
+
+                }
                 // kick out if it is the last one (end => true) or state is 'Success' or 'Fail
                 if (stateInfo.Type === 'Success' || stateInfo.Type === 'Fail' || stateInfo.End === true) {
                     return this.buildExecutionEndResponse(stateInfo);
-                }
-
-                const newEvent = event ? Object.assign({}, event) : {};
-                event.output = event.output || {};
-                try {
-                    if (outputPath) {
-                        event.output[outputPath] = JSON.parse(outputData);
-                    } else {
-                        event.output = JSON.parse(outputData);
-                    }
-                } catch (error) {
-                    if (error.message.indexOf('JSON at position') > -1){
-                        if(outputPath) {
-                            event.output[outputPath] = outputData;
-                        } else {
-                            event.output = outputData;
-                        }
-                    } else {
-                        throw error;
-                    }
                 }
 
                 newEvent.input = Object.assign(event.input || {}, event.output);
@@ -105,7 +91,7 @@ class StateMachineExecutor {
      * decides what to run based on state type
      * @param {object} stateInfo
      */
-    whatToRun(stateInfo) {
+    whatToRun(stateInfo, event) {
         switch(stateInfo.Type) {
             case 'Task':
                 // TODO: catch, retry
@@ -117,7 +103,7 @@ class StateMachineExecutor {
             // - Seconds, SecondsPath: wait the given number of seconds
             // - Timestamp, TimestampPath: wait until the given timestamp
             case 'Wait':
-                return this.buildWaitState(stateInfo);
+                return this.buildWaitState(stateInfo, event);
             // ends the state machine execution with 'success' status
             case 'Succeed':
             // ends the state machine execution with 'fail' status
@@ -134,14 +120,65 @@ class StateMachineExecutor {
     }
 
     buildWaitState(stateInfo, event) {
+        let milliseconds = 0;
         // SecondsPath: specified using a path from the state's input data.
-        if ((stateInfo.Seconds && _.isNaN(+stateInfo.Seconds)) ||
-            (stateInfo.SecondsPath && event.input && _.isNaN(+event.input[stateInfo.SecondsPath]))) {
+        if ((stateInfo.Seconds && _.isNaN(+stateInfo.Seconds))) {
+            milliseconds = +stateInfo.Seconds
+        } else if (stateInfo.SecondsPath && event.input) {
+            milliseconds = +jsonPath({ json: event.input, path: stateInfo.SecondsPath })[0];
+        }
+
+        if (_.isNaN(milliseconds)) {
             return ''+ this.buildExecutionEndResponse(stateInfo, this.callback);
         }
 
-        const seconds = stateInfo.Seconds || event.input[stateInfo.SecondsPath];
-        return `setTimeout(() => { return true; }, ${+seconds});`;
+        return `setTimeout(() => {}, ${+milliseconds*1000});`;
+    }
+
+    /**
+     * Moves the result of the task to the specified ResultPath in
+     * the task's input according to the state's config.
+     * AWS docs on processing of input/output:
+     * https://docs.aws.amazon.com/step-functions/latest/dg/input-output-paths.html
+     * @param {*} event
+     * @param {*} stateInfo
+     * @param {*} outputData
+     */
+    processResult(event, stateInfo, outputData) {
+        // according to AWS docs:
+        // ResultPath then selects what combination of the state input and the task result to pass to the output.
+        // If ResultPath is specified, the result of the task should be stored at that path
+        // as a child node in the original state machine input
+        try {
+            const result = JSON.parse(outputData);
+            event.input = event.input || {};
+            if(stateInfo.ResultPath) {
+                const pathPieces = stateInfo.ResultPath.split('.');
+
+                // AWS state language uses JSON path syntax
+                // https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-input-output-processing.html
+                // $ is the root object, so we can ignore when setting
+                // the result path data
+                if (pathPieces[0] === '$') {
+                    pathPieces.shift();
+                }
+                // move the result data into the input object
+                // building according to ResultPath config
+                const currentObj = event.input;
+                _.forEach(pathPieces, (path, index) => {
+                    if(index === pathPieces.length - 1) {
+                        currentObj[path] = result;
+                    } else {
+                        currentObj[path] = {};
+                    }
+                });
+            } else {
+                // TODO: double check this is correct (no ResultPath defined)
+                event.input = Object.assign(event.input, result);
+            }
+        } catch(error) {
+            return this.callback(error, null);
+        }
     }
 }
 
