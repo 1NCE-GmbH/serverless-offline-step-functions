@@ -2,6 +2,7 @@ const child_process = require('child_process');
 const stateMachineJSON = require('./step-functions.json');
 const _ = require('lodash');
 const jsonPath = require('JSONPath');
+const choiceProcessor = require('./choice-processor');
 
 class StateMachineExecutor {
     constructor(stateMachineName, stateName) {
@@ -21,7 +22,6 @@ class StateMachineExecutor {
      */
     spawnProcess(stateInfo, event, context, callback) {
         this.callback = callback;
-        const outputPath = stateInfo.OutputPath;
 
         const child = child_process.spawn('node',
         [
@@ -46,6 +46,7 @@ class StateMachineExecutor {
             });
 
             child.on('exit', () => {
+                const outputPath = stateInfo.OutputPath;
                 const newEvent = event ? Object.assign({}, event) : {};
 
                 // any state except the fail state may have output
@@ -99,6 +100,7 @@ class StateMachineExecutor {
                 return `require("./${handlerSplit[0]}").${handlerSplit[1]}(JSON.parse(process.env.event), JSON.parse(process.env.context)).then((data) => { console.log(JSON.stringify(data))})`;
             // should pass input directly to output without doing work
             case 'Pass':
+                return '';
             // Waits before moving on:
             // - Seconds, SecondsPath: wait the given number of seconds
             // - Timestamp, TimestampPath: wait until the given timestamp
@@ -111,11 +113,13 @@ class StateMachineExecutor {
                 return ''+ this.buildExecutionEndResponse(stateInfo, this.callback);
             // adds branching logic to the state machine
             case 'Choice':
+                this.processChoices(stateInfo, event);
+                return '';
             case 'Input':
             case 'Output':
             case 'Parallel':
             default:
-                return `console.log('${stateInfo.Type}')`
+                return `console.error('${stateInfo.Type}')`
         }
     }
 
@@ -133,6 +137,50 @@ class StateMachineExecutor {
         }
 
         return `setTimeout(() => {}, ${+milliseconds*1000});`;
+    }
+
+    /**
+     *
+     * @param {*} stateInfo
+     * @param {*} event
+     */
+    processChoices(stateInfo, event) {
+        // AWS docs:
+        // Step Functions examines each of the Choice Rules in the order listed
+        // in the Choices field and transitions to the state specified in the
+        // Next field of the first Choice Rule in which the variable matches the
+        // value according to the comparison operator
+        // https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html
+        _.forEach(stateInfo.Choices, (choice) => {
+            const keys = Object.keys(choice);
+            let choiceComparator = '';
+            if (choice.Not) {
+                choiceComparator = 'Not';
+                choice = choice.Not;
+            } else if (choice.And) {
+                choiceComparator = 'And';
+                choice = choice.And;
+            } else if (choice.Or) {
+                choiceComparator = 'Or';
+                choice = choice.Or;
+            } else {
+                choiceComparator = _.filter(keys, key => key !== 'Variable' && key !== 'Next');
+
+                if (choiceComparator.length > 1) {
+                    throw new Error('mulitple choice comparison keys found');
+                }
+
+                choiceComparator = choiceComparator[0];
+            }
+
+            if (choice.Default) {
+                stateInfo.Next = choice.Default;
+                return false; // short circuit forEach
+            } else if (choiceProcessor.processChoice(choiceComparator, choice, event)) {
+                stateInfo.Next = choice.Next;
+                return false; // short circuit forEach
+            }
+        });
     }
 
     /**
