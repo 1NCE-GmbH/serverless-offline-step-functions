@@ -17,6 +17,14 @@ class ServerlessPlugin {
       'before:offline:start:init': () =>
         Promise.bind(this)
         .then(this.parseYaml)
+        // TODO: validate state names
+        // State machine, execution, and activity names must be 1–80 characters in length,
+        // must be unique for your account and region, and must not contain any of the following:
+        // - Whitespace
+        // - Wildcard characters (? *)
+        // - Bracket characters (< > { } [ ])
+        // - Special characters (: ; , \ | ^ ~ $ # % & ` ")
+        // - Control characters (\\u0000 - \\u001f or \\u007f - \\u009f).
         .then(this.createEndpoints)
         .then(this.createStepFunctionsJSON),
     };
