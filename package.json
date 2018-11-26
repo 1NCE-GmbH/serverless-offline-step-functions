@@ -1,7 +1,7 @@
 {
   "name": "serverless-offline-step-functions",
-  "version": "0.0.2",
-  "description": "plugin to support step functions",
+  "version": "1.0.1",
+  "description": "plugin to support AWS step functions in Serverless",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

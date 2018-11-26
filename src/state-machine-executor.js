@@ -18,11 +18,8 @@ class StateMachineExecutor {
      * @param {*} stateInfo
      * @param {*} event
      * @param {*} context
-     * @param {*} callback
      */
-    spawnProcess(stateInfo, event, context, callback) {
-        this.callback = callback;
-
+    spawnProcess(stateInfo, event, context) {
         const child = child_process.spawn('node',
         [
             '-e',
@@ -69,7 +66,7 @@ class StateMachineExecutor {
 
                 newEvent.stateName = stateInfo.Next;
                 stateInfo = stateMachineJSON.stateMachines[event.stateMachine].definition.States[stateInfo.Next];
-                this.spawnProcess(stateInfo, newEvent, context, callback);
+                this.spawnProcess(stateInfo, newEvent, context);
             });
     }
 
@@ -85,7 +82,7 @@ class StateMachineExecutor {
 
         const response = stateInfo.Type === 'Fail' ? null :
             { statusCode: 200, body: JSON.stringify({ startDate: this.startDate, executionArn: this.executionArn })};
-        return this.callback(error, response);
+        // return this.callback(error, response);
     }
 
     /**
@@ -110,7 +107,7 @@ class StateMachineExecutor {
             case 'Succeed':
             // ends the state machine execution with 'fail' status
             case 'Fail':
-                return ''+ this.buildExecutionEndResponse(stateInfo, this.callback);
+                return ''+ this.buildExecutionEndResponse(stateInfo);
             // adds branching logic to the state machine
             case 'Choice':
                 this.processChoices(stateInfo, event);
@@ -133,7 +130,7 @@ class StateMachineExecutor {
         }
 
         if (_.isNaN(milliseconds)) {
-            return ''+ this.buildExecutionEndResponse(stateInfo, this.callback);
+            return ''+ this.buildExecutionEndResponse(stateInfo);
         }
 
         return `setTimeout(() => {}, ${+milliseconds*1000});`;
