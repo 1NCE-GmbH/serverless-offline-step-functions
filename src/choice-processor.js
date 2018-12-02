@@ -27,7 +27,7 @@ class ChoiceProcessor {
             throw new Error('no "Variable" attribute found in Choice rule');
         }
 
-        const inputValue = jsonPath({ json: event.input, path: choice.Variable })[0];
+        let inputValue = jsonPath({ json: JSON.parse(event.input), path: choice.Variable})[0];
         const choiceValue = choice[choiceComparator];
         if (choice[choiceComparator].indexOf('TimestampEquals') === 0) {
             choiceValue = (new Date(choiceValue)).getTime();

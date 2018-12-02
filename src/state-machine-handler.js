@@ -7,18 +7,22 @@ const stateMachineJSON = require('./step-functions.json');
 module.exports.run = (event, context, callback) => {
     const sme = new StateMachineExecutor(event.stateMachine, event.stateName);
     // TODO: args for script file - see parsePath below
-    if (typeof event.path === 'string') {
-        event.pathParameters = parsePath(event.path);
+    if (typeof event.pathParameters === 'string') {
+        event.pathParameters = parsePath(event.pathParameters);
     }
 
     // TODO: args for script file - see parsePath below
-    if (typeof event.query === 'string') {
-        event.queryString = parsePath(event.query);
+    if (typeof event.queryStringParameters === 'string') {
+        event.queryStringParameters = parsePath(event.queryStringParameters);
     }
 
     // TODO: args for script file - see parsePath below
     if (typeof event.headers === 'string') {
         event.headers = parsePath(event.headers);
+    }
+
+    if (typeof event.body !== 'string') {
+        event.body = JSON.stringify(event.body);
     }
 
     const stateInfo = stateMachineJSON.stateMachines[event.stateMachine].definition.States[event.stateName];
@@ -39,7 +43,7 @@ function parsePath(paramString) {
     const paramObj = {};
     paramString.replace(/{|}/g, '').split(',').forEach((piece) => {
         const keyVal = piece.split('=');
-        paramObj[keyVal[0]] = keyVal[1] || keyVal[0];
+        paramObj[keyVal[0].trim()] = keyVal[1] || keyVal[0];
     });
 
     return paramObj;
