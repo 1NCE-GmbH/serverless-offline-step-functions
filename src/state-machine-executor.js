@@ -4,19 +4,11 @@ const stateMachineJSON = require('./step-functions.json');
 const _ = require('lodash');
 const jsonPath = require('JSONPath');
 const choiceProcessor = require('./choice-processor');
+const stateTypes = require('./state-types');
 
 const logPrefix = '[Serverless Offline Step Functions]:';
 const ERROR = 'error';
 
-const stateTypes = {
-    FAIL: 'Fail',
-    PASS: 'Pass',
-    TASK: 'Task',
-    SUCCEED: 'Succeed',
-    CHOICE: 'Choice',
-    WAIT: 'Wait',
-    PARALLEL: 'Parallel',
-}
 class StateMachineExecutor {
     constructor(stateMachineName, stateName) {
         // step execution response includes the start date
@@ -33,6 +25,7 @@ class StateMachineExecutor {
      * @param {*} context
      */
     spawnProcess(stateInfo, event, context) {
+        console.log('stateInfo: ', stateInfo);
         // This will be used as the parent node key for when the process
         // finishes and its output needs to be processed.
         const outputKey = `sf-${Date.now()}`;
@@ -230,11 +223,12 @@ class StateMachineExecutor {
      * @param {*} stateInfo
      */
     processTaskInputPath(event, stateInfo) {
+        stateInfo.InputPath = typeof stateInfo.InputPath === 'undefined' ? '$' : stateInfo.InputPath;
         if (stateInfo.InputPath === null) {
             event.input = '{}';
         } else {
             let input = event.input ? event.input : '{}';
-            jsonPath({ json: input, path: stateInfo.InputPath || '$', callback: (data) => {
+            jsonPath({ json: input, path: stateInfo.InputPath, callback: (data) => {
                 event.input = JSON.stringify(Object.assign({}, JSON.parse(data)));
             }});
         }
