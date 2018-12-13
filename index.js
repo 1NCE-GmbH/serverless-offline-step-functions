@@ -5,6 +5,7 @@ const path = require('path');
 const Promise = require('bluebird');
 const fs = require('fs');
 const stateTypes = require('./src/state-types');
+const functionHelper = require('serverless-offline/src/functionHelper');
 
 class ServerlessPlugin {
   constructor(serverless, options) {
@@ -12,7 +13,6 @@ class ServerlessPlugin {
     this.service = serverless.service;
     this.options = options;
     this.logPrefix = '[Offline Step Functions] ';
-    // TODO: add config?
     this.handlersDirectory = `./node_modules/serverless-offline-step-functions/src`;
 
     this.hooks = {
@@ -45,6 +45,7 @@ class ServerlessPlugin {
     _.forEach(this.serverless.service.stepFunctions.stateMachines, (stateMachine, stateMachineName) => {
         _.forEach(stateMachine.definition.States, (state, stateName) => {
             if (state.Type === stateTypes.TASK) {
+                const servicePath = this.serverless.config.servicePath;
                 let lambdaName = this.serverless.providers.aws.naming.extractLambdaNameFromArn(state.Resource);
 
                 // store the lambda function handler in the state for reference in the JSON file
@@ -61,19 +62,22 @@ class ServerlessPlugin {
                     throw new Error(`Lambda function not found: ${lambdaName}`);
                 }
 
+                const lambdaFn = this.service.getFunction(lambdaName);
+                const lamdaOpts = functionHelper.getFunctionOptions(lambdaFn, lambdaName, servicePath);
+
                 state.handler = functions[lambdaName].handler;
                 if (stateName === stateMachine.definition.StartAt) {
-                    // create a new function for an endpoint and
-                    // give it a unique name
-                    const newFn = {};
-                    const functionName = `${lambdaName}-StepFunction${Date.now()}`;
+                    // // create a new function for an endpoint and
+                    // // give it a unique name
+                    // const lambdaFn = {};
+                    // const functionName = `${lambdaName}-StepFunction${Date.now()}`;
 
                     // give the new function the same events as it's state machine twin
-                    newFn.events = Object.assign([], stateMachine.events);
+                    lambdaFn.events = Object.assign([], stateMachine.events);
 
                     // set the handler to the generic state machine handler function
-                    newFn.handler = `${this.handlersDirectory}/state-machine-handler.run`;
-                    _.forEach(newFn.events, (event) => {
+                    lambdaFn.handler = `${this.handlersDirectory}/state-machine-handler.run`;
+                    _.forEach(lambdaFn.events, (event) => {
                         if (event.http) {
                             event.input = { stateName: stateMachine.definition.StartAt, stateMachine: stateMachineName };
                             event.http.integration = 'lambda';
@@ -81,8 +85,8 @@ class ServerlessPlugin {
                                 headers: {
                                     'Content-type': 'application/json'
                                 },
-                                // this custom template copies (most of) the default template
-                                // but also sends the state name and state machine name
+                                // this custom template mimics input to StepFunctions
+                                // and sends the state name and state machine name
                                 template: {
                                     'application/json':
                                     require('./src/state-machine-request-template')(stateMachineName, stateMachine.definition.StartAt),
@@ -100,8 +104,8 @@ class ServerlessPlugin {
                     });
 
                     // add to serverless functions
-                    functions[functionName] = newFn;
-                    this.serverless.cli.log(`${this.logPrefix} created ${functionName}`);
+                    functions[lambdaName] = lambdaFn;
+                    this.serverless.cli.log(`${this.logPrefix} created ${lambdaName}`);
                 }
             }
         });

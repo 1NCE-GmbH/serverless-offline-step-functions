@@ -22,14 +22,14 @@ const jsonPath = require('JSONPath');
 // - TimestampLessThanEquals
 
 class ChoiceProcessor {
-    processChoice(choiceComparator, choice, event) {
+    processChoice(choiceComparator, choice, data) {
         if (!choice.Variable && !choice.Default) {
             throw new Error('no "Variable" attribute found in Choice rule');
         }
 
-        let inputValue = jsonPath({ json: JSON.parse(event.input), path: choice.Variable})[0];
+        let inputValue = jsonPath({ json: data, path: choice.Variable})[0];
         const choiceValue = choice[choiceComparator];
-        if (choice[choiceComparator].indexOf('TimestampEquals') === 0) {
+        if (choice[choiceComparator] === 'TimestampEquals' === 0) {
             choiceValue = (new Date(choiceValue)).getTime();
             inputValue = (new Date(inputValue)).getTime();
         }
@@ -63,13 +63,13 @@ class ChoiceProcessor {
                 return this.checkLTE(choiceValue, inputValue);
             case 'Not':
                 const name = _.filter(keys, key => key !== 'Variable' && key !== 'Next');
-                return !this.processChoice(name, choice, event);
+                return !this.processChoice(name, choice, data);
             case 'And':
                 let andResult = true;
                 // choice will contain an array of choice rules
                 _.forEach(choice, (item) => {
                     const comparator = this.getChoiceComparator(choice);
-                    if (!this.processChoice(comparator, item, event)) {
+                    if (!this.processChoice(comparator, item, data)) {
                         // since this is an AND, if any item is false, the statement will be false
                         result = false;
                         return false; // short circuit forEach
@@ -81,7 +81,7 @@ class ChoiceProcessor {
                 // choice will contain an array of choice rules
                 _.forEach(choice, (item) => {
                     const comparator = this.getChoiceComparator(choice);
-                    if (this.processChoice(comparator, item, event)) {
+                    if (this.processChoice(comparator, item, data)) {
                         // since this is an OR, if any item is true, the statement will be true
                         result = true;
                         return false; // short circuit forEach

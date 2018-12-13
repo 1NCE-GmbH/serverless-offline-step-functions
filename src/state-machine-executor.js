@@ -5,12 +5,14 @@ const _ = require('lodash');
 const jsonPath = require('JSONPath');
 const choiceProcessor = require('./choice-processor');
 const stateTypes = require('./state-types');
+const StateRunTimeError = require('./state-machine-error')
 
 const logPrefix = '[Serverless Offline Step Functions]:';
-const ERROR = 'error';
 
 class StateMachineExecutor {
     constructor(stateMachineName, stateName) {
+        this.currentStateName = stateName;
+        this.stateMachineName = stateMachineName;
         // step execution response includes the start date
         this.startDate = Date.now();
         // step execution response includes the execution ARN
@@ -21,28 +23,24 @@ class StateMachineExecutor {
     /**
      * Spawns a new process to run a given State from a state machine
      * @param {*} stateInfo
-     * @param {*} event
+     * @param {*} input
      * @param {*} context
      */
-    spawnProcess(stateInfo, event, context) {
-        console.log('stateInfo: ', stateInfo);
+    spawnProcess(stateInfo, input, context) {
         // This will be used as the parent node key for when the process
         // finishes and its output needs to be processed.
         const outputKey = `sf-${Date.now()}`;
 
-        // clear output, it will be processed later
-        event.output = undefined;
-
-        this.processTaskInputPath(event, stateInfo);
+        this.processTaskInputPath(input, stateInfo);
 
         const child = child_process.spawn('node',
         [
             '-e',
-            this.whatToRun(stateInfo, event, outputKey)],
+            this.whatToRun(stateInfo, input, outputKey)],
             { stdio: 'pipe',
             env: Object.assign({}, process.env, {
-                event: JSON.stringify(event),
-                context: JSON.stringify(context)
+                input: JSON.stringify(input),
+                context: JSON.stringify(context),
             })});
 
             let outputData = null;
@@ -56,46 +54,50 @@ class StateMachineExecutor {
                         // only process data if sent as step functions output so data from
                         // other console.logs don't get processed
                         if (typeof parsed[outputKey] !== 'undefined') {
-                            outputData = JSON.stringify(parsed[outputKey]);
+                            outputData = parsed[outputKey];
                         }
                     } catch(error) {
-                        console.log(data.toString());
+                        console.log(`${logPrefix} error processing data: ${data}`);
                     }
                 }
             });
 
 
             child.stderr.on('data', (data) => {
-                console.error(`${logPrefix} ${data.toString()}`)
+                console.error(`${logPrefix} stderr: ${data.toString()}`)
             });
 
             child.on('exit', () => {
+                let output = null;
                 // any state except the fail state may have OutputPath
                 if(stateInfo.Type !== 'Fail') {
-                    this.processTaskResultPath(event, stateInfo, outputData);
+                    // state types Parallel, Pass, and Task can generate a result and can include ResultPath
+                    if([stateTypes.PARALLEL, stateTypes.PASS, stateTypes.TASK].indexOf(stateInfo.Type) > -1) {
+                        input = this.processTaskResultPath(input, stateInfo, outputData);
+                    }
 
                     // NOTE:
                     // State machine data is represented by JSON text, so you can provide values using any data type supported by JSON
                     // https://docs.aws.amazon.com/step-functions/latest/dg/concepts-state-machine-data.html
-                    this.processTaskOutputPath(event, stateInfo);
-
+                    output = this.processTaskOutputPath(input, stateInfo);
                 }
                 // kick out if it is the last one (end => true) or state is 'Success' or 'Fail
-                if (stateInfo.Type === 'Success' || stateInfo.Type === 'Fail' || stateInfo.End === true) {
-                    return this.endStateMachine(event);
+                if (stateInfo.Type === 'Succeed' || stateInfo.Type === 'Fail' || stateInfo.End === true) {
+                    return this.endStateMachine(null, null, output);
                 }
 
-                const newEvent = event ? Object.assign({}, event) : {};
-                newEvent.input = event.output;
-                newEvent.stateName = stateInfo.Next;
-                stateInfo = stateMachineJSON.stateMachines[event.stateMachine].definition.States[stateInfo.Next];
-                this.spawnProcess(stateInfo, newEvent, context);
+                // const newEvent = event ? Object.assign({}, event) : {};
+                // newEvent.input = event.output;
+                // newEvent.stateName = stateInfo.Next;
+                this.currentStateName = stateInfo.Next;
+                stateInfo = stateMachineJSON.stateMachines[this.stateMachineName].definition.States[stateInfo.Next];
+                this.spawnProcess(stateInfo, output, context);
             });
     }
 
-    endStateMachine(event, message, endStatus) {
-        if( endStatus && endStatus === ERROR) {
-            console.error(`${logPrefix} State Machine Failed with an Error`);
+    endStateMachine(error, input, output, message) {
+        if(error) {
+            console.error(`${logPrefix} Error:`, error);
         } else {
             console.log(`${logPrefix} State Machine Completed`);
         }
@@ -104,8 +106,12 @@ class StateMachineExecutor {
             console.log(`${logPrefix}`, message);
         }
 
-        console.log(`${logPrefix} event:`, event);
-        return event;
+        if(input) {
+            console.log(`${logPrefix} input:`, input);
+        }
+
+        console.log(`${logPrefix} output:`, output);
+        return true;
     }
 
     /**
@@ -123,9 +129,9 @@ class StateMachineExecutor {
                 // process.exit(0) must be called in .then because a child process will not exit if it has connected
                 // to another resource, such as a database or redis, which may be a source of future events.
                 const handlerSplit = stateInfo.handler.split('.');
-                let runner = `require("./${handlerSplit[0]}").${handlerSplit[1]}(JSON.parse(process.env.event), JSON.parse(process.env.context))`;
-                runner += `.then((data) => { const out = JSON.parse(data); console.log(JSON.stringify({ "${outputKey}": out })); process.exit(0); })`;
-                runner += `.catch((e) => { console.error("${logPrefix}",e); })`;
+                let runner = `require("./${handlerSplit[0]}").${handlerSplit[1]}(JSON.parse(process.env.input), JSON.parse(process.env.context))`;
+                runner += `.then((data) => { console.log(JSON.stringify({ "${outputKey}": data || {} })); process.exit(0); })`;
+                runner += `.catch((e) => { console.error("${logPrefix} handler error:",e); })`;
                 return runner;
 
             // should pass input directly to output without doing work
@@ -140,7 +146,7 @@ class StateMachineExecutor {
             case 'Succeed':
             // ends the state machine execution with 'fail' status
             case 'Fail':
-                return this.endStateMachine(stateInfo);
+                return this.endStateMachine(null, stateInfo);
             // adds branching logic to the state machine
             case 'Choice':
                 this.processChoices(stateInfo, event);
@@ -162,7 +168,8 @@ class StateMachineExecutor {
         }
 
         if (_.isNaN(milliseconds)) {
-            return ''+ this.buildExecutionEndResponse(stateInfo);
+            return ''+ this.endStateMachine(
+                new StateRunTimeError('Specified wait time is not a number'), stateInfo);
         }
 
         return `setTimeout(() => {}, ${+milliseconds*1000});`;
@@ -173,7 +180,7 @@ class StateMachineExecutor {
      * @param {*} stateInfo
      * @param {*} event
      */
-    processChoices(stateInfo, event) {
+    processChoices(stateInfo, input) {
         // AWS docs:
         // Step Functions examines each of the Choice Rules in the order listed
         // in the Choices field and transitions to the state specified in the
@@ -196,20 +203,21 @@ class StateMachineExecutor {
                 choiceComparator = _.filter(keys, key => key !== 'Variable' && key !== 'Next');
 
                 if (choiceComparator.length > 1) {
-                    return this.endStateMachine(event, 'mulitple choice comparison keys found');
+                    return this.endStateMachine(null, input, 'mulitple choice comparison keys found');
                 }
 
                 choiceComparator = choiceComparator[0];
             }
 
-            if (choice.Default) {
-                stateInfo.Next = choice.Default;
-                return false; // short circuit forEach
-            } else if (choiceProcessor.processChoice(choiceComparator, choice, event)) {
+            if (choiceProcessor.processChoice(choiceComparator, choice, input)) {
                 stateInfo.Next = choice.Next;
                 return false; // short circuit forEach
             }
         });
+
+        if (!stateInfo.Next && stateInfo.Default) {
+            stateInfo.Next = stateInfo.Default;
+        }
     }
 
     /**
@@ -219,17 +227,17 @@ class StateMachineExecutor {
      * entire input. If you use null, the input is discarded (not sent to the state's
      * task) and the task receives JSON text representing an empty object {}.
      * https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-input-output-processing.html
-     * @param {*} event
+     * @param {*} input
      * @param {*} stateInfo
      */
-    processTaskInputPath(event, stateInfo) {
+    processTaskInputPath(input, stateInfo) {
         stateInfo.InputPath = typeof stateInfo.InputPath === 'undefined' ? '$' : stateInfo.InputPath;
         if (stateInfo.InputPath === null) {
-            event.input = '{}';
+            input = {};
         } else {
-            let input = event.input ? event.input : '{}';
+            input = input ? input : '{}';
             jsonPath({ json: input, path: stateInfo.InputPath, callback: (data) => {
-                event.input = JSON.stringify(Object.assign({}, JSON.parse(data)));
+                input = Object.assign({}, data);
             }});
         }
     }
@@ -243,21 +251,23 @@ class StateMachineExecutor {
      * @param {*} stateInfo
      * @param {string} resultData
      */
-    processTaskResultPath(event, stateInfo, resultData) {
+    processTaskResultPath(input, stateInfo, resultData) {
         // according to AWS docs:
         // ResultPath (Optional)
         // A path that selects a portion of the state's input to be passed to the state's output.
         // If omitted, it has the value $ which designates the entire input.
         // For more information, see Input and Output Processing.
         // https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-common-fields.html
-        try {
-            const input = event.input ? JSON.parse(event.input) : {};
-            jsonPath({ json: resultData, path: stateInfo.ResultPath || '$', callback: (data) => {
-                event.input = JSON.stringify(Object.assign(input || {}, JSON.parse(data)));
-            }});
-        } catch(error) {
-            return this.endStateMachine(event, `Error processing task result`);
+        const path = typeof stateInfo.ResultPath === 'undefined' ? '$' : stateInfo.ResultPath;
+        const processed = jsonPath({ json: resultData, path: path });
+
+        if (typeof processed === 'undefined' || processed.length === 0) {
+            return this.endStateMachine(
+                new StateRunTimeError(`An error occurred while executing the state '${this.currentStateName}'. Invalid ResultPath '${stateInfo.ResultPath}': The choice state's condition path references an invalid value.`),
+                resultData);
         }
+
+        return processed[0];
     }
 
     /**
@@ -271,16 +281,19 @@ class StateMachineExecutor {
      * @param {*} event
      * @param {*} stateInfo
      */
-    processTaskOutputPath(event, stateInfo) {
-        event.output = '{}';
+    processTaskOutputPath(data, stateInfo) {
+        let output = null;
         if (stateInfo.OutputPath !== null) {
-            jsonPath({ json: event.input, path: stateInfo.OutputPath || '$', callback: (data) => {
-                if (!data) {
-                    return this.endStateMachine(event, 'OutputPath is an invalid JSON path', ERROR);
-                }
-                event.output = JSON.stringify(Object.assign({}, JSON.parse(data)));
-            }});
+            output = jsonPath({ json: data, path: stateInfo.OutputPath || '$', })[0];
+
+            if (!output) {
+                return this.endStateMachine(
+                    new StateRunTimeError(`An error occurred while executing the state '${this.currentStateName}'. Invalid OutputPath '${stateInfo.OutputPath}': The choice state's condition path references an invalid value.`),
+                    data);
+            }
         }
+
+        return output;
     }
 }
 
