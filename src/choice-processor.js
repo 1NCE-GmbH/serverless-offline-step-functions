@@ -1,5 +1,7 @@
 const _ = require('lodash');
 const jsonPath = require('JSONPath');
+const StateMachineError = require('./state-machine-error');
+
 // The following comparison operators are supported:
 // - And
 // - BooleanEquals
@@ -22,8 +24,89 @@ const jsonPath = require('JSONPath');
 // - TimestampLessThanEquals
 
 class ChoiceProcessor {
-    processChoice(choiceComparator, choice, data) {
-        if (!choice.Variable && !choice.Default) {
+    processChoice(stateInfo, input) {
+        let nextState = null;
+        // AWS docs:
+        // Step Functions examines each of the Choice Rules in the order listed
+        // in the Choices field and transitions to the state specified in the
+        // Next field of the first Choice Rule in which the variable matches the
+        // value according to the comparison operator
+        // https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html
+        _.forEach(stateInfo.Choices, (choice) => {
+            const keys = Object.keys(choice);
+            let choiceComparator = '';
+            if (choice.Not) {
+                choiceComparator = 'Not';
+                choice = choice.Not;
+            } else if (choice.And) {
+                if (this.evaluateAnd(choice.And) === true) {
+                    nextState = choice.Next;
+                    return false // short circuit forEach
+                }
+            } else if (choice.Or) {
+                if (this.evaluateOr(choice.Or) === true) {
+                    nextState = choice.Next;
+                    return false // short circuit forEach
+                }
+            } else {
+                choiceComparator = _.filter(keys, key => key !== 'Variable' && key !== 'Next');
+
+                if (choiceComparator.length > 1) {
+                    throw new StateMachineError('mulitple choice comparison keys found');
+                }
+
+                choiceComparator = choiceComparator[0];
+
+                if (this.evaluateChoice(choiceComparator, choice, input)) {
+                    nextState = choice.Next;
+                    return false; // short circuit forEach
+                }
+            }
+
+
+        });
+
+        if (nextState !== null) {
+            return nextState;
+        }
+
+        if (stateInfo.Default) {
+            return stateInfo.Default;
+        }
+
+        throw new StateMachineError('No "next" state found - try adding a "Default" option');
+    }
+
+    evaluateAnd(comparisons) {
+        let andResult = true;
+        // choice will contain an array of choice rules
+        _.forEach(choice, (item) => {
+            const comparator = this.getChoiceComparator(choice);
+            if (!this.processChoice(comparator, item, data)) {
+                // since this is an AND, if any item is false, the statement will be false
+                andResult = false;
+                return false; // short circuit forEach
+            }
+        });
+        return andResult;
+    }
+
+    evaluateOr(comparisons) {
+        let orResult = false;
+        // choice will contain an array of choice rules
+        _.forEach(choice, (item) => {
+            const comparator = this.getChoiceComparator(choice);
+            if (this.processChoice(comparator, item, data)) {
+                // since this is an OR, if any item is true, the statement will be true
+                orResult = true;
+                return false; // short circuit forEach
+            }
+        });
+        return orResult;
+    }
+
+    evaluateChoice(choiceComparator, choice, data) {
+        if (!choice.Variable) {
             throw new Error('no "Variable" attribute found in Choice rule');
         }
 
@@ -64,30 +147,6 @@ class ChoiceProcessor {
             case 'Not':
                 const name = _.filter(keys, key => key !== 'Variable' && key !== 'Next');
                 return !this.processChoice(name, choice, data);
-            case 'And':
-                let andResult = true;
-                // choice will contain an array of choice rules
-                _.forEach(choice, (item) => {
-                    const comparator = this.getChoiceComparator(choice);
-                    if (!this.processChoice(comparator, item, data)) {
-                        // since this is an AND, if any item is false, the statement will be false
-                        result = false;
-                        return false; // short circuit forEach
-                    }
-                });
-                return andResult;
-            case 'Or':
-                let orResult = false;
-                // choice will contain an array of choice rules
-                _.forEach(choice, (item) => {
-                    const comparator = this.getChoiceComparator(choice);
-                    if (this.processChoice(comparator, item, data)) {
-                        // since this is an OR, if any item is true, the statement will be true
-                        result = true;
-                        return false; // short circuit forEach
-                    }
-                });
-                return orResult;
         }
     }
 

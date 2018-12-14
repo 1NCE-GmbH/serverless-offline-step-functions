@@ -118,7 +118,7 @@ class StateMachineExecutor {
      * decides what to run based on state type
      * @param {object} stateInfo
      */
-    whatToRun(stateInfo, event, outputKey) {
+    whatToRun(stateInfo, input, outputKey) {
         switch(stateInfo.Type) {
             case 'Task':
                 // TODO: catch, retry
@@ -141,7 +141,7 @@ class StateMachineExecutor {
             // - Seconds, SecondsPath: wait the given number of seconds
             // - Timestamp, TimestampPath: wait until the given timestamp
             case 'Wait':
-                return this.buildWaitState(stateInfo, event);
+                return this.buildWaitState(stateInfo, input);
             // ends the state machine execution with 'success' status
             case 'Succeed':
             // ends the state machine execution with 'fail' status
@@ -149,7 +149,7 @@ class StateMachineExecutor {
                 return this.endStateMachine(null, stateInfo);
             // adds branching logic to the state machine
             case 'Choice':
-                this.processChoices(stateInfo, event);
+                stateInfo.Next = choiceProcessor.processChoices(stateInfo, input);
                 return '';
             case 'Parallel':
                 return `console.error('${logPrefix} 'Parallel' state type is not yet supported by serverless offline step functions')`;
@@ -173,51 +173,6 @@ class StateMachineExecutor {
         }
 
         return `setTimeout(() => {}, ${+milliseconds*1000});`;
-    }
-
-    /**
-     *
-     * @param {*} stateInfo
-     * @param {*} event
-     */
-    processChoices(stateInfo, input) {
-        // AWS docs:
-        // Step Functions examines each of the Choice Rules in the order listed
-        // in the Choices field and transitions to the state specified in the
-        // Next field of the first Choice Rule in which the variable matches the
-        // value according to the comparison operator
-        // https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-choice-state.html
-        _.forEach(stateInfo.Choices, (choice) => {
-            const keys = Object.keys(choice);
-            let choiceComparator = '';
-            if (choice.Not) {
-                choiceComparator = 'Not';
-                choice = choice.Not;
-            } else if (choice.And) {
-                choiceComparator = 'And';
-                choice = choice.And;
-            } else if (choice.Or) {
-                choiceComparator = 'Or';
-                choice = choice.Or;
-            } else {
-                choiceComparator = _.filter(keys, key => key !== 'Variable' && key !== 'Next');
-
-                if (choiceComparator.length > 1) {
-                    return this.endStateMachine(null, input, 'mulitple choice comparison keys found');
-                }
-
-                choiceComparator = choiceComparator[0];
-            }
-
-            if (choiceProcessor.processChoice(choiceComparator, choice, input)) {
-                stateInfo.Next = choice.Next;
-                return false; // short circuit forEach
-            }
-        });
-
-        if (!stateInfo.Next && stateInfo.Default) {
-            stateInfo.Next = stateInfo.Default;
-        }
     }
 
     /**
