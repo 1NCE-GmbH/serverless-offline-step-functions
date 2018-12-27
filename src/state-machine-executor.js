@@ -5,7 +5,8 @@ const _ = require('lodash');
 const jsonPath = require('JSONPath');
 const choiceProcessor = require('./choice-processor');
 const stateTypes = require('./state-types');
-const StateRunTimeError = require('./state-machine-error')
+const StateRunTimeError = require('./state-machine-error');
+const createLambdaContext = require('../node_modules/serverless-offline/src/createLambdaContext');
 
 const logPrefix = '[Serverless Offline Step Functions]:';
 
@@ -26,7 +27,8 @@ class StateMachineExecutor {
      * @param {*} input
      * @param {*} context
      */
-    spawnProcess(stateInfo, input, context) {
+    spawnProcess(stateInfo, input, context, callback = null) {
+        console.log('input: ', input);
         // This will be used as the parent node key for when the process
         // finishes and its output needs to be processed.
         const outputKey = `sf-${Date.now()}`;
@@ -36,16 +38,16 @@ class StateMachineExecutor {
         const child = child_process.spawn('node',
         [
             '-e',
-            this.whatToRun(stateInfo, input, outputKey)],
+            this.whatToRun(stateInfo, input, outputKey, callback)],
             { stdio: 'pipe',
             env: Object.assign({}, process.env, {
                 input: JSON.stringify(input),
-                context: JSON.stringify(context),
             })});
 
             let outputData = null;
             child.stdout.on('data', (data) => {
-                if (Buffer.isBuffer(data) && stateInfo.Type !== stateTypes.FAIL) {
+                if (Buffer.isBuffer(data) &&
+                stateInfo.Type !== stateTypes.FAIL) {
                     data = data.toString().trim();
 
                     try {
@@ -64,22 +66,23 @@ class StateMachineExecutor {
 
 
             child.stderr.on('data', (data) => {
-                console.error(`${logPrefix} stderr: ${data.toString()}`)
+                console.error(`${logPrefix} stderr:`, data.toString())
             });
 
             child.on('exit', () => {
+                console.log(`* * * * * ${this.currentStateName} * * * * *`);
                 let output = null;
                 // any state except the fail state may have OutputPath
                 if(stateInfo.Type !== 'Fail') {
                     // state types Parallel, Pass, and Task can generate a result and can include ResultPath
                     if([stateTypes.PARALLEL, stateTypes.PASS, stateTypes.TASK].indexOf(stateInfo.Type) > -1) {
-                        input = this.processTaskResultPath(input, stateInfo, outputData);
+                        input = this.processTaskResultPath(input, stateInfo, (outputData || {}));
                     }
 
                     // NOTE:
                     // State machine data is represented by JSON text, so you can provide values using any data type supported by JSON
                     // https://docs.aws.amazon.com/step-functions/latest/dg/concepts-state-machine-data.html
-                    output = this.processTaskOutputPath(input, stateInfo);
+                    output = this.processTaskOutputPath(input, stateInfo.OutputPath);
                 }
                 // kick out if it is the last one (end => true) or state is 'Success' or 'Fail
                 if (stateInfo.Type === 'Succeed' || stateInfo.Type === 'Fail' || stateInfo.End === true) {
@@ -91,6 +94,7 @@ class StateMachineExecutor {
                 // newEvent.stateName = stateInfo.Next;
                 this.currentStateName = stateInfo.Next;
                 stateInfo = stateMachineJSON.stateMachines[this.stateMachineName].definition.States[stateInfo.Next];
+                console.log('output: ', output);
                 this.spawnProcess(stateInfo, output, context);
             });
     }
@@ -118,7 +122,7 @@ class StateMachineExecutor {
      * decides what to run based on state type
      * @param {object} stateInfo
      */
-    whatToRun(stateInfo, input, outputKey) {
+    whatToRun(stateInfo, input, outputKey, callback) {
         switch(stateInfo.Type) {
             case 'Task':
                 // TODO: catch, retry
@@ -129,7 +133,10 @@ class StateMachineExecutor {
                 // process.exit(0) must be called in .then because a child process will not exit if it has connected
                 // to another resource, such as a database or redis, which may be a source of future events.
                 const handlerSplit = stateInfo.handler.split('.');
-                let runner = `require("./${handlerSplit[0]}").${handlerSplit[1]}(JSON.parse(process.env.input), JSON.parse(process.env.context))`;
+                // const cb = callback(null, { statusCode: 200, body: JSON.stringify({ startDate: sme.startDate, executionArn: sme.executionArn }) });
+                // const context = ;
+                let runner = `const context = require('./node_modules/serverless-offline/src/createLambdaContext')(require('./${handlerSplit[0]}').${handlerSplit[1]}, ${callback}); `;
+                runner += `require("./${handlerSplit[0]}").${handlerSplit[1]}(JSON.parse(process.env.input), context, ${callback})`;
                 runner += `.then((data) => { console.log(JSON.stringify({ "${outputKey}": data || {} })); process.exit(0); })`;
                 runner += `.catch((e) => { console.error("${logPrefix} handler error:",e); })`;
                 return runner;
@@ -149,7 +156,7 @@ class StateMachineExecutor {
                 return this.endStateMachine(null, stateInfo);
             // adds branching logic to the state machine
             case 'Choice':
-                stateInfo.Next = choiceProcessor.processChoices(stateInfo, input);
+                stateInfo.Next = choiceProcessor.processChoice(stateInfo, input);
                 return '';
             case 'Parallel':
                 return `console.error('${logPrefix} 'Parallel' state type is not yet supported by serverless offline step functions')`;
@@ -190,7 +197,7 @@ class StateMachineExecutor {
         if (stateInfo.InputPath === null) {
             input = {};
         } else {
-            input = input ? input : '{}';
+            input = input ? input : {};
             jsonPath({ json: input, path: stateInfo.InputPath, callback: (data) => {
                 input = Object.assign({}, data);
             }});
@@ -218,7 +225,7 @@ class StateMachineExecutor {
 
         if (typeof processed === 'undefined' || processed.length === 0) {
             return this.endStateMachine(
-                new StateRunTimeError(`An error occurred while executing the state '${this.currentStateName}'. Invalid ResultPath '${stateInfo.ResultPath}': The choice state's condition path references an invalid value.`),
+                new StateRunTimeError(`An error occurred while executing the state '${this.currentStateName}'. Invalid ResultPath '${path}': The ResultPath references an invalid value.`),
                 resultData);
         }
 
@@ -236,14 +243,14 @@ class StateMachineExecutor {
      * @param {*} event
      * @param {*} stateInfo
      */
-    processTaskOutputPath(data, stateInfo) {
+    processTaskOutputPath(data, path) {
         let output = null;
-        if (stateInfo.OutputPath !== null) {
-            output = jsonPath({ json: data, path: stateInfo.OutputPath || '$', })[0];
+        if (path !== null) {
+            output = jsonPath({ json: data, path: path || '$', })[0];
 
             if (!output) {
                 return this.endStateMachine(
-                    new StateRunTimeError(`An error occurred while executing the state '${this.currentStateName}'. Invalid OutputPath '${stateInfo.OutputPath}': The choice state's condition path references an invalid value.`),
+                    new StateRunTimeError(`An error occurred while executing the state '${this.currentStateName}'. Invalid OutputPath '${path}': The Output path references an invalid value.`),
                     data);
             }
         }
