@@ -4,14 +4,14 @@ Serverless Offline plugin to support step functions.
 ## Installation
 ```
 # dependencies:
-$ npm install -D serverless-offline, servereless-step-functions
+$ npm install -D serverless-offline, serverless-step-functions
 
 # the fun stuff
 $ npm install -D serverless-offline-step-functions
 ```
 
 ## Usage
-- Add to **plugins** section in `sererless.yml`:
+- Add to **plugins** section in `serverless.yml`:
 
 ```
 plugins:
@@ -25,7 +25,7 @@ serverless-offline-step-functions:
     resourcePrefix: ${self:service}-${self:provider.stage}-
 ```
 
-Serveless Offline will now be able to run your state machines similar to AWS!
+Serverless Offline will now be able to run your state machines similar to AWS!
 
 ## Supported States
 - [x] Task
