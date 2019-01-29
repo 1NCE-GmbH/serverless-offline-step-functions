@@ -11,9 +11,13 @@ const createLambdaContext = require('../node_modules/serverless-offline/src/crea
 const logPrefix = '[Serverless Offline Step Functions]:';
 
 class StateMachineExecutor {
-    constructor(stateMachineName, stateName) {
+    constructor(stateMachineName, stateName, stateMachineJSONInput) {
         this.currentStateName = stateName;
         this.stateMachineName = stateMachineName;
+        this.stateMachineJSON = stateMachineJSON;
+        if (stateMachineJSONInput) {
+            this.stateMachineJSON.stateMachines = _.assign({}, this.stateMachineJSON.stateMachines, stateMachineJSONInput);
+        }
         // step execution response includes the start date
         this.startDate = Date.now();
         // step execution response includes the execution ARN
@@ -28,6 +32,7 @@ class StateMachineExecutor {
      * @param {*} context
      */
     spawnProcess(stateInfo, input, context, callback = null) {
+        console.log(`* * * * * ${this.currentStateName} * * * * *`);
         console.log('input: ', input);
         // This will be used as the parent node key for when the process
         // finishes and its output needs to be processed.
@@ -70,7 +75,6 @@ class StateMachineExecutor {
             });
 
             child.on('exit', () => {
-                console.log(`* * * * * ${this.currentStateName} * * * * *`);
                 let output = null;
                 // any state except the fail state may have OutputPath
                 if(stateInfo.Type !== 'Fail') {
@@ -93,7 +97,7 @@ class StateMachineExecutor {
                 // newEvent.input = event.output;
                 // newEvent.stateName = stateInfo.Next;
                 this.currentStateName = stateInfo.Next;
-                stateInfo = stateMachineJSON.stateMachines[this.stateMachineName].definition.States[stateInfo.Next];
+                stateInfo = this.stateMachineJSON.stateMachines[this.stateMachineName].definition.States[stateInfo.Next];
                 console.log('output: ', output);
                 this.spawnProcess(stateInfo, output, context);
             });

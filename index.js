@@ -16,6 +16,7 @@ class ServerlessPlugin {
     this.handlersDirectory = `./node_modules/serverless-offline-step-functions/src`;
 
     this.hooks = {
+        'before:offline:start:init': () => require('./src/step-functions-api-simulator.js')(this.serverless),
         'offline:start:init': () =>
             Promise.bind(this)
             .then(this.parseYaml)
