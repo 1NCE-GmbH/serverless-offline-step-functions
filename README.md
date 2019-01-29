@@ -4,14 +4,14 @@ Serverless Offline plugin to support step functions.
 ## Installation
 ```
 # dependencies:
-$ npm install -D serverless-offline, servereless-step-functions
+$ npm install -D serverless-offline, serverless-step-functions
 
 # the fun stuff
 $ npm install -D serverless-offline-step-functions
 ```
 
 ## Usage
-- Add to **plugins** section in `sererless.yml`:
+- Add to **plugins** section in `serverless.yml`:
 
 ```
 plugins:
