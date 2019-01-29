@@ -21,8 +21,17 @@ plugins:
 ```
 - If your resources have a prefix added during deploy time, add the `resourcePrefix` confing to the `serverless.yml` **custom** section. This will allow `serverless-offline-step-functions` to find the resources. See below for an example:
 ```
-serverless-offline-step-functions:
+custom:
+  serverless-offline-step-functions:
     resourcePrefix: ${self:service}-${self:provider.stage}-
+```
+
+## Server
+The plugin also sets up a server to run any lambdas that make use of the StepFunctions API in the `aws-sdk`. The default port is `8014`; however, you can specify which port to listen to like so:
+```
+custom:
+  serverless-offline-step-functions:
+    port: 8014
 ```
 
 Serveless Offline will now be able to run your state machines similar to AWS!
