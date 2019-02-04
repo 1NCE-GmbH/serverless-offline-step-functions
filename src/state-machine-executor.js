@@ -1,7 +1,7 @@
 const Promise = require('bluebird');
 const child_process = require('child_process');
-const stateMachineJSON = require('./step-functions.json');
 const _ = require('lodash');
+const fs = require('fs');
 const jsonPath = require('JSONPath');
 const choiceProcessor = require('./choice-processor');
 const stateTypes = require('./state-types');
@@ -14,9 +14,11 @@ class StateMachineExecutor {
     constructor(stateMachineName, stateName, stateMachineJSONInput) {
         this.currentStateName = stateName;
         this.stateMachineName = stateMachineName;
-        this.stateMachineJSON = stateMachineJSON;
+        this.stateMachineJSON = {};
         if (stateMachineJSONInput) {
             this.stateMachineJSON.stateMachines = _.assign({}, this.stateMachineJSON.stateMachines, stateMachineJSONInput);
+        } else if (fs.existsSync('./state-machine.json')) {
+            this.stateMachineJSON = require('./step-functions.json');
         }
         // step execution response includes the start date
         this.startDate = Date.now();
