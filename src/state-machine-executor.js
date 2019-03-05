@@ -176,20 +176,6 @@ class StateMachineExecutor {
             milliseconds = +stateInfo.Seconds
         } else if (stateInfo.SecondsPath && event.input) {
             milliseconds = +jsonPath({ json: event.input, path: stateInfo.SecondsPath })[0];
-        } else if (stateInfo.Timestamp) {
-            const waitDateMs = Date.parse(stateInfo.Timestamp);
-            if (waitDateMs < Date.now()) {
-                milliseconds = 0;
-            } else {
-                milliseconds = waitDateMs - Date.now();
-            }
-        } else if (stateInfo.TimestampPath && event.input) {
-            const waitDateMs = Date.parse(jsonPath({ json: event.input, path: stateInfo.SecondsPath })[0]);
-            if (waitDateMs < Date.now()) {
-                milliseconds = 0;
-            } else {
-                milliseconds = waitDateMs - Date.now();
-            }
         }
 
         if (_.isNaN(milliseconds)) {
