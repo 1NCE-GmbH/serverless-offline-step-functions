@@ -15,8 +15,15 @@ class StateMachineExecutor {
         this.stateMachineJSON = {};
         if (stateMachineJSONInput) {
             this.stateMachineJSON.stateMachines = _.assign({}, this.stateMachineJSON.stateMachines, stateMachineJSONInput);
-        } else if (fs.existsSync('./state-machine.json')) {
-            this.stateMachineJSON = require('./step-functions.json');
+        } else {
+            try{
+                const json = require('./step-functions.json');
+                if (!_.isEmpty(json)) {
+                    this.stateMachineJSON = json;
+                }
+            } catch(e) {
+                throw new Error('no state machine json found');
+            }
         }
         // step execution response includes the start date
         this.startDate = Date.now();
@@ -169,26 +176,26 @@ class StateMachineExecutor {
         }
     }
 
-    buildWaitState(stateInfo, event) {
-        let milliseconds = 0;
+    buildWaitState(stateInfo, input) {
+        let milliseconds;
         // SecondsPath: specified using a path from the state's input data.
         if ((stateInfo.Seconds && _.isNaN(+stateInfo.Seconds))) {
-            milliseconds = +stateInfo.Seconds
-        } else if (stateInfo.SecondsPath && event.input) {
-            milliseconds = +jsonPath({ json: event.input, path: stateInfo.SecondsPath })[0];
+            milliseconds = +stateInfo.Seconds * 1000
+        } else if (stateInfo.SecondsPath && input) {
+            milliseconds = +jsonPath({ json: input, path: stateInfo.SecondsPath })[0] * 1000;
         } else if (stateInfo.Timestamp) {
-            const waitDateMs = Date.parse(stateInfo.Timestamp);
-            if (waitDateMs < Date.now()) {
+            const waitDate = new Date(stateInfo.Timestamp);
+            if (waitDate.getTime() < Date.now()) {
                 milliseconds = 0;
             } else {
-                milliseconds = waitDateMs - Date.now();
+                milliseconds = waitDate.getTime() - Date.now();
             }
-        } else if (stateInfo.TimestampPath && event.input) {
-            const waitDateMs = Date.parse(jsonPath({ json: event.input, path: stateInfo.SecondsPath })[0]);
-            if (waitDateMs < Date.now()) {
+        } else if (stateInfo.TimestampPath && input) {
+            const waitDate = new Date(jsonPath({ json: input, path: stateInfo.TimestampPath })[0]);
+            if (waitDate.getTime() < Date.now()) {
                 milliseconds = 0;
             } else {
-                milliseconds = waitDateMs - Date.now();
+                milliseconds = waitDate.getTime() - Date.now();
             }
         }
 
@@ -197,7 +204,7 @@ class StateMachineExecutor {
                 new StateRunTimeError('Specified wait time is not a number'), stateInfo);
         }
 
-        return `setTimeout(() => {}, ${+milliseconds*1000});`;
+        return `setTimeout(() => {}, ${+milliseconds});`;
     }
 
     /**
