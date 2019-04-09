@@ -43,7 +43,15 @@ class ServerlessPlugin {
     // object key in the service's custom data for config values
     const SERVERLESS_OFFLINE_STEP_FUNCTIONS = 'serverless-offline-step-functions';
     const functions = this.serverless.service.functions;
+    if (typeof this.serverless.service.stepFunctions.stateMachines === 'undefined') {
+        console.warn(`${this.logPrefix}: No state machines found! Please check your stepFunctions configuration for the 'stateMachines' object.`);
+        return false;
+    }
     _.forEach(this.serverless.service.stepFunctions.stateMachines, (stateMachine, stateMachineName) => {
+        if (typeof stateMachine.definition === 'undefined') {
+            console.warn(`${this.logPrefix}: no 'definition' found for state machine ${stateMachineName}. Continuing to next state machine.`);
+            return true;
+        }
         _.forEach(stateMachine.definition.States, (state, stateName) => {
             if (state.Type === stateTypes.TASK) {
                 const servicePath = this.serverless.config.servicePath;
@@ -111,8 +119,6 @@ class ServerlessPlugin {
             }
         });
     });
-
-
   }
 
   /**
