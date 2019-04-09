@@ -8,7 +8,7 @@ module.exports = (serverless) => {
     let port = 8014;
     if (typeof serverless.service.custom !== 'undefined' &&
     typeof serverless.service.custom['serverless-offline-step-functions'] !== 'undefined') {
-        port = serverless.service.custom['serverless-offline-step-functions'].port;
+        port = serverless.service.custom['serverless-offline-step-functions'].port || port;
     }
 
     const logPrefix = chalk.magenta('[Step Functions API Simulator]');
