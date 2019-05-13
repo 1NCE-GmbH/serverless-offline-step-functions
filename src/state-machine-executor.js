@@ -157,11 +157,13 @@ class StateMachineExecutor {
                 // processed by this plugin.
                 // process.exit(0) must be called in .then because a child process will not exit if it has connected
                 // to another resource, such as a database or redis, which may be a source of future events.
-                const handlerSplit = stateInfo.handler.split('.');
+                const lastDotIndex = stateInfo.handler.lastIndexOf('.');
+                const handlerFile = stateInfo.handler.substring(0, lastDotIndex);
+                const handlerName = stateInfo.handler.substring(lastDotIndex + 1);
                 // const cb = callback(null, { statusCode: 200, body: JSON.stringify({ startDate: sme.startDate, executionArn: sme.executionArn }) });
                 // const context = ;
-                let runner = `const context = require('./node_modules/serverless-offline-step-functions/node_modules/serverless-offline/src/createLambdaContext')(require('${this.getWebpackOrCommonFuction(handlerSplit[0])}').${handlerSplit[1]}, ${callback}); `;
-                runner += `Promise.resolve(require("${this.getWebpackOrCommonFuction(handlerSplit[0])}").${handlerSplit[1]}(JSON.parse(process.env.input), context, ${callback}))`;
+                let runner = `const context = require('./node_modules/serverless-offline-step-functions/node_modules/serverless-offline/src/createLambdaContext')(require('${this.getWebpackOrCommonFuction(handlerFile)}').${handlerName}, ${callback}); `;
+                runner += `Promise.resolve(require("${this.getWebpackOrCommonFuction(handlerFile)}").${handlerName}(JSON.parse(process.env.input), context, ${callback}))`;
                 runner += `.then((data) => { console.log(JSON.stringify({ "${outputKey}": data || {} })); process.exit(0); })`;
                 runner += `.catch((e) => { console.error("${logPrefix} handler error:",e); })`;
                 return runner;

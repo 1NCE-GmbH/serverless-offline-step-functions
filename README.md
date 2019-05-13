@@ -25,6 +25,12 @@ custom:
   serverless-offline-step-functions:
     resourcePrefix: ${self:service}-${self:provider.stage}-
 ```
+- If you use serverless-webpack add your custom path where the build file are saved from the webpack build
+```
+custom:
+  serverless-offline-step-functions:
+    customPath: '.webpack/service'
+```
 
 ## Server
 The plugin also sets up a server to run any lambdas that make use of the StepFunctions API in the `aws-sdk`. The default port is `8014`; however, you can specify which port to listen to like so:
