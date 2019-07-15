@@ -21,7 +21,7 @@
     "bluebird": "^3.5.3",
     "chalk": "^2.4.2",
     "http": "0.0.0",
-    "lodash": "^4.17.11",
+    "lodash": ">=4.17.13",
     "serverless": "^1.32.0",
     "serverless-offline": "^3.31.2"
   }
