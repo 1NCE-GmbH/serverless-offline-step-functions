@@ -155,7 +155,7 @@ class ServerlessPlugin {
     };
 
     return (
-      typeof(resource) === String
+      typeof resource === 'string'
         ? extractors.static(resource)
         : extractors.dynamic(resource)
     );
