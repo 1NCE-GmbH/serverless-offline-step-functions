@@ -39,7 +39,7 @@ class StateMachineExecutor {
      */
     spawnProcess(stateInfo, input, context, callback = null) {
         console.log(`* * * * * ${this.currentStateName} * * * * *`);
-        console.log('input: ', input);
+        console.log('input: \n', JSON.stringify(input, 0, 2), '\n');
         // This will be used as the parent node key for when the process
         // finishes and its output needs to be processed.
         const outputKey = `sf-${Date.now()}`;
@@ -104,8 +104,8 @@ class StateMachineExecutor {
                 // newEvent.stateName = stateInfo.Next;
                 this.currentStateName = stateInfo.Next;
                 stateInfo = this.stateMachineJSON.stateMachines[this.stateMachineName].definition.States[stateInfo.Next];
-                console.log('output: ', output);
-                this.spawnProcess(stateInfo, output, context);
+                console.log('output: \n', JSON.stringify(output, 0, 2), '\n');
+                this.spawnProcess(stateInfo, output, context, callback);
             });
     }
 
@@ -124,8 +124,22 @@ class StateMachineExecutor {
             console.log(`${logPrefix} input:`, input);
         }
 
-        console.log(`${logPrefix} output:`, output);
+        console.log(`${logPrefix} output: \n`, JSON.stringify(output, 0, 2), '\n');
         return true;
+    }
+
+    /**
+     * tris to get the transpiled webpack function, if exists. Else, it should get the common function directly.
+     */
+    getWebpackOrCommonFuction(path) {
+      const webpackPath = `./.webpack/service/${path}.js`
+      const webpackFileExists = fs.existsSync(webpackPath);
+
+      return (
+        webpackFileExists
+          ? webpackPath
+          : `./${path}`
+      );
     }
 
     /**
@@ -138,15 +152,15 @@ class StateMachineExecutor {
                 // TODO: catch, retry
                 // This will spin up a node child process to fire off the handler function of the given lambda
                 // the output of the lambda is placed into a JSON object with the outputKey generated above as
-                // the parent node and piped to stdout for processing. This is done so other console.logs are not
+                // the parent node and piped to stdout for processing. This is done so other callback console.logs are not
                 // processed by this plugin.
                 // process.exit(0) must be called in .then because a child process will not exit if it has connected
                 // to another resource, such as a database or redis, which may be a source of future events.
                 const handlerSplit = stateInfo.handler.split('.');
                 // const cb = callback(null, { statusCode: 200, body: JSON.stringify({ startDate: sme.startDate, executionArn: sme.executionArn }) });
                 // const context = ;
-                let runner = `const context = require('./node_modules/serverless-offline/src/createLambdaContext')(require('./${handlerSplit[0]}').${handlerSplit[1]}, ${callback}); `;
-                runner += `require("./${handlerSplit[0]}").${handlerSplit[1]}(JSON.parse(process.env.input), context, ${callback})`;
+                let runner = `const context = require('./node_modules/serverless-offline-step-functions/node_modules/serverless-offline/src/createLambdaContext')(require('${this.getWebpackOrCommonFuction(handlerSplit[0])}').${handlerSplit[1]}, ${callback}); `;
+                runner += `Promise.resolve(require("${this.getWebpackOrCommonFuction(handlerSplit[0])}").${handlerSplit[1]}(JSON.parse(process.env.input), context, ${callback}))`;
                 runner += `.then((data) => { console.log(JSON.stringify({ "${outputKey}": data || {} })); process.exit(0); })`;
                 runner += `.catch((e) => { console.error("${logPrefix} handler error:",e); })`;
                 return runner;

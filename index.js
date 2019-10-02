@@ -39,14 +39,18 @@ class ServerlessPlugin {
    * A custom request template is used to send the state machine name and starting
    * state's name to the lambda's execution
    */
-  createEndpoints() {
+  async createEndpoints() {
     // object key in the service's custom data for config values
     const SERVERLESS_OFFLINE_STEP_FUNCTIONS = 'serverless-offline-step-functions';
     const functions = this.serverless.service.functions;
+
+    await this.getServerlessStepFunctionsPlugin().yamlParse();
+
     if (typeof this.serverless.service.stepFunctions.stateMachines === 'undefined') {
         console.warn(`${this.logPrefix}: No state machines found! Please check your stepFunctions configuration for the 'stateMachines' object.`);
         return false;
     }
+
     _.forEach(this.serverless.service.stepFunctions.stateMachines, (stateMachine, stateMachineName) => {
         if (typeof stateMachine.definition === 'undefined') {
             console.warn(`${this.logPrefix}: no 'definition' found for state machine ${stateMachineName}. Continuing to next state machine.`);
@@ -55,7 +59,7 @@ class ServerlessPlugin {
         _.forEach(stateMachine.definition.States, (state, stateName) => {
             if (state.Type === stateTypes.TASK) {
                 const servicePath = this.serverless.config.servicePath;
-                let lambdaName = this.serverless.providers.aws.naming.extractLambdaNameFromArn(state.Resource);
+                let lambdaName = this.getLambdaName(state.Resource);
 
                 // store the lambda function handler in the state for reference in the JSON file
                 // it will be used to call the proper handler code when executing the fucntion
@@ -122,11 +126,50 @@ class ServerlessPlugin {
   }
 
   /**
+   * Get Serverless Step Functions plugin object.
+   */
+  getServerlessStepFunctionsPlugin() {
+    const filteredPlugins = this.serverless.pluginManager.plugins.filter(
+      plugin => plugin.constructor.name == 'ServerlessStepFunctions'
+    );
+
+    return filteredPlugins[0];
+  }
+
+  /**
    * Creates a JSON file for reference during the state machine execution
    */
   createStepFunctionsJSON() {
     fs.writeFileSync(`${this.handlersDirectory}/step-functions.json`, JSON.stringify(this.serverless.service.stepFunctions));
   }
+
+  /**
+   * Solves the Lambda name for Fn::Get or ARN strings.
+   */
+  getLambdaName(resource) {
+    if(!resource) throw new Error(`No resource was provided`);
+
+    const extractors = {
+      static: this.serverless.providers.aws.naming.extractLambdaNameFromArn,
+      dynamic: this.extractLambdaNameFromFunction,
+    };
+
+    return (
+      typeof(resource) === String
+        ? extractors.static(resource)
+        : extractors.dynamic(resource)
+    );
+  };
+
+  /*
+   * Parse the Lambda name from a given Fn:Get functon.
+   */
+  extractLambdaNameFromFunction(resource) {
+    const functionDeclaration = resource['Fn::GetAtt'];
+    const functionName = functionDeclaration[0];
+
+    return functionName.replace('LambdaFunction', '').replace(/^\w/, c => c.toLowerCase());
+  };
 
   /**
    * Adds the step function configuration to the serverless config
