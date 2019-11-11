@@ -35,14 +35,14 @@ module.exports = (serverless) => {
                     const sme = new StateMachineExecutor(machineKey, machine.definition.StartAt, { [machineKey]: machine });
 
                     // TODO: check integration type to set input properly (i.e. lambda vs. sns)
-                    sme.spawnProcess(currentState, JSON.parse(data.input), {}, () => true);
+                    sme.spawnProcess(currentState, data.input, {}, (err, result) => result);
                     startDate = sme.startDate;
                     exeArn = sme.executionArn;
                 }
             });
             // per docs, step execution response includes the start date and execution arn
             res.writeHead(200, {'Content-Type': 'application/json'});
-         
+
             res.end(JSON.stringify({
                 startDate: startDate,
                 executionArn: exeArn,
