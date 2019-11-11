@@ -1,6 +1,6 @@
 {
   "name": "serverless-offline-step-functions",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "plugin to support AWS step functions in Serverless",
   "main": "index.js",
   "scripts": {
