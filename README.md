@@ -25,11 +25,11 @@ custom:
   serverless-offline-step-functions:
     resourcePrefix: ${self:service}-${self:provider.stage}-
 ```
-- If you use serverless-webpack add your custom path where the build file are saved from the webpack build
+- If you use serverless-plugin-typescript, you may need to have custom path where the code is transpiled
 ```
 custom:
   serverless-offline-step-functions:
-    customPath: '.webpack/service'
+    srcPath: '.build'
 ```
 
 ## Server

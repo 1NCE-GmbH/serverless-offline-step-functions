@@ -9,10 +9,10 @@ const functionHelper = require('serverless-offline/src/functionHelper');
 
 const SERVERLESS_OFFLINE_STEP_FUNCTIONS = 'serverless-offline-step-functions';
 
-const getCustomFnPath = (serverless) => {
+const getSrcFnPath = (serverless) => {
   const options = (serverless.service.custom || {})[SERVERLESS_OFFLINE_STEP_FUNCTIONS];
 
-  return options && options.customPath ? options.customPath + '/' : '';
+  return options && options.srcPath ? options.srcPath + '/' : '';
 };
 
 class ServerlessPlugin {
@@ -22,7 +22,7 @@ class ServerlessPlugin {
     this.options = options;
     this.logPrefix = '[Offline Step Functions] ';
     this.handlersDirectory = `./node_modules/serverless-offline-step-functions/src`;
-    this.customFnPath = getCustomFnPath(this.serverless);
+    this.srcFnPath = getSrcFnPath(this.serverless);
 
     this.hooks = {
         'before:offline:start:init': () => require('./src/step-functions-api-simulator.js')(this.serverless),
@@ -86,7 +86,7 @@ class ServerlessPlugin {
                 const lambdaFn = this.service.getFunction(lambdaName);
                 const lamdaOpts = functionHelper.getFunctionOptions(lambdaFn, lambdaName, servicePath);
 
-                state.handler = `${this.customFnPath}${functions[lambdaName].handler}`;
+                state.handler = `${this.srcFnPath}${functions[lambdaName].handler}`;
                 if (stateName === stateMachine.definition.StartAt) {
                     // // create a new function for an endpoint and
                     // // give it a unique name
