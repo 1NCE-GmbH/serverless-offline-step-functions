@@ -255,22 +255,14 @@ class StateMachineExecutor {
      * @param {string} resultData
      */
     processTaskResultPath(input, stateInfo, resultData) {
-        // according to AWS docs:
-        // ResultPath (Optional)
-        // A path that selects a portion of the state's input to be passed to the state's output.
-        // If omitted, it has the value $ which designates the entire input.
-        // For more information, see Input and Output Processing.
-        // https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-common-fields.html
         const path = typeof stateInfo.ResultPath === 'undefined' ? '$' : stateInfo.ResultPath;
-        const processed = jsonPath({ json: resultData, path: path });
 
-        if (typeof processed === 'undefined' || processed.length === 0) {
-            return this.endStateMachine(
-                new StateRunTimeError(`An error occurred while executing the state '${this.currentStateName}'. Invalid ResultPath '${path}': The ResultPath references an invalid value.`),
-                resultData);
-        }
+        let exprList = jsonPath.toPathArray(path);
+        if (exprList[0] === '$' && exprList.length > 1) {exprList.shift();}
+        let resultObject = resultData;
+        exprList.reduceRight((_, item) => {let temp = {}; temp[item] = resultObject; resultObject = Object.assign({}, temp);}, null);
 
-        return processed[0];
+        return Object.assign(input, resultObject);
     }
 
     /**
