@@ -8,6 +8,18 @@ const StateRunTimeError = require('./state-machine-error');
 
 const logPrefix = '[Serverless Offline Step Functions]:';
 
+/**
+ * InputPath and Parameters select parts from the state input to be sent to the task resource (lambda)
+ *  - InputPath precedes Paramaters selection
+ * ResultPath defines the target path to store the task's output in the original state input
+ *  - Leave our ResultPath to keep the original state input
+ *  - Set to null to not include task's output
+ * OutputPath is used to select parts of the whole state input (including ResultPath changes) as the state output
+ * All paths are json paths.
+ * There's a lot more to it, but these are the basics. Not all features are implemented here.
+ * See https://docs.aws.amazon.com/step-functions/latest/dg/concepts-input-output-filtering.html
+ */
+
 class StateMachineExecutor {
     constructor(stateMachineName, stateName, stateMachineJSONInput) {
         this.currentStateName = stateName;
@@ -16,12 +28,12 @@ class StateMachineExecutor {
         if (stateMachineJSONInput) {
             this.stateMachineJSON.stateMachines = _.assign({}, this.stateMachineJSON.stateMachines, stateMachineJSONInput);
         } else {
-            try{
+            try {
                 const json = require('./step-functions.json');
                 if (!_.isEmpty(json)) {
                     this.stateMachineJSON = json;
                 }
-            } catch(e) {
+            } catch (e) {
                 throw new Error('no state machine json found');
             }
         }
@@ -40,78 +52,81 @@ class StateMachineExecutor {
      */
     spawnProcess(stateInfo, input, context, callback = null) {
         console.log(`* * * * * ${this.currentStateName} * * * * *`);
-        console.log('input: \n', JSON.stringify(input, 0, 2), '\n');
         // This will be used as the parent node key for when the process
         // finishes and its output needs to be processed.
+        console.log('state input: \n', JSON.stringify(input, 0, 2), '\n');
         const outputKey = `sf-${Date.now()}`;
 
-        this.processTaskInputPath(input, stateInfo);
+        let taskInput = this.processTaskInput(input, stateInfo);
+        console.log('task input: \n', JSON.stringify(taskInput, 0, 2), '\n');
 
         const child = child_process.spawn('node',
-        [
-            '-e',
-            this.whatToRun(stateInfo, input, outputKey, callback)],
-            { stdio: 'pipe',
-            env: Object.assign({}, process.env, {
-                input: JSON.stringify(input),
-            })});
+            [
+                '-e',
+                this.whatToRun(stateInfo, taskInput, outputKey, callback)],
+            {
+                stdio: 'pipe',
+                env: Object.assign({}, process.env, {
+                    input: JSON.stringify(taskInput),
+                })
+            });
 
-            let outputData = null;
-            child.stdout.on('data', (data) => {
-                if (Buffer.isBuffer(data) &&
+        let outputData = null;
+        child.stdout.on('data', (data) => {
+            if (Buffer.isBuffer(data) &&
                 stateInfo.Type !== stateTypes.FAIL) {
-                    data = data.toString().trim();
+                data = data.toString().trim();
 
-                    try {
-                        // check that output is a JSON string
-                        const parsed = JSON.parse(data);
-                        // only process data if sent as step functions output so data from
-                        // other console.logs don't get processed
-                        if (typeof parsed[outputKey] !== 'undefined') {
-                            outputData = parsed[outputKey];
-                        }
-                    } catch(error) {
-                        console.log(`${logPrefix} error processing data: ${data}`);
+                try {
+                    // check that output is a JSON string
+                    const parsed = JSON.parse(data);
+                    // only process data if sent as step functions output so data from
+                    // other console.logs don't get processed
+                    if (typeof parsed[outputKey] !== 'undefined') {
+                        outputData = parsed[outputKey];
                     }
+                } catch (error) {
+                    console.log(`${logPrefix} error processing data: ${data}`);
                 }
-            });
+            }
+        });
 
 
-            child.stderr.on('data', (data) => {
-                console.error(`${logPrefix} stderr:`, data.toString())
-            });
+        child.stderr.on('data', (data) => {
+            console.error(`${logPrefix} stderr:`, data.toString())
+        });
 
-            child.on('exit', () => {
-                let output = null;
-                // any state except the fail state may have OutputPath
-                if(stateInfo.Type !== 'Fail') {
-                    // state types Parallel, Pass, and Task can generate a result and can include ResultPath
-                    if([stateTypes.PARALLEL, stateTypes.PASS, stateTypes.TASK].indexOf(stateInfo.Type) > -1) {
-                        input = this.processTaskResultPath(input, stateInfo, (outputData || {}));
-                    }
-
-                    // NOTE:
-                    // State machine data is represented by JSON text, so you can provide values using any data type supported by JSON
-                    // https://docs.aws.amazon.com/step-functions/latest/dg/concepts-state-machine-data.html
-                    output = this.processTaskOutputPath(input, stateInfo.OutputPath);
-                }
-                // kick out if it is the last one (end => true) or state is 'Success' or 'Fail
-                if (stateInfo.Type === 'Succeed' || stateInfo.Type === 'Fail' || stateInfo.End === true) {
-                    return this.endStateMachine(null, null, output);
+        child.on('exit', () => {
+            let output = null;
+            // any state except the fail state may have OutputPath
+            if (stateInfo.Type !== 'Fail') {
+                // state types Parallel, Pass, and Task can generate a result and can include ResultPath
+                if ([stateTypes.PARALLEL, stateTypes.PASS, stateTypes.TASK].indexOf(stateInfo.Type) > -1) {
+                    input = this.processTaskResultPath(input, stateInfo, (outputData || {}));
                 }
 
-                // const newEvent = event ? Object.assign({}, event) : {};
-                // newEvent.input = event.output;
-                // newEvent.stateName = stateInfo.Next;
-                this.currentStateName = stateInfo.Next;
-                stateInfo = this.stateMachineJSON.stateMachines[this.stateMachineName].definition.States[stateInfo.Next];
-                console.log('output: \n', JSON.stringify(output, 0, 2), '\n');
-                this.spawnProcess(stateInfo, output, context, callback);
-            });
+                // NOTE:
+                // State machine data is represented by JSON text, so you can provide values using any data type supported by JSON
+                // https://docs.aws.amazon.com/step-functions/latest/dg/concepts-state-machine-data.html
+                output = this.processTaskOutputPath(input, stateInfo.OutputPath);
+            }
+            // kick out if it is the last one (end => true) or state is 'Success' or 'Fail
+            if (stateInfo.Type === 'Succeed' || stateInfo.Type === 'Fail' || stateInfo.End === true) {
+                return this.endStateMachine(null, null, output);
+            }
+
+            // const newEvent = event ? Object.assign({}, event) : {};
+            // newEvent.input = event.output;
+            // newEvent.stateName = stateInfo.Next;
+            this.currentStateName = stateInfo.Next;
+            stateInfo = this.stateMachineJSON.stateMachines[this.stateMachineName].definition.States[stateInfo.Next];
+            console.log('output: \n', JSON.stringify(output, 0, 2), '\n');
+            this.spawnProcess(stateInfo, output, context, callback);
+        });
     }
 
     endStateMachine(error, input, output, message) {
-        if(error) {
+        if (error) {
             console.error(`${logPrefix} Error:`, error);
         } else {
             console.log(`${logPrefix} State Machine Completed`);
@@ -121,7 +136,7 @@ class StateMachineExecutor {
             console.log(`${logPrefix}`, message);
         }
 
-        if(input) {
+        if (input) {
             console.log(`${logPrefix} input:`, input);
         }
 
@@ -133,14 +148,14 @@ class StateMachineExecutor {
      * tris to get the transpiled webpack function, if exists. Else, it should get the common function directly.
      */
     getWebpackOrCommonFuction(path) {
-      const webpackPath = `./.webpack/service/${path}.js`
-      const webpackFileExists = fs.existsSync(webpackPath);
+        const webpackPath = `./.webpack/service/${path}.js`
+        const webpackFileExists = fs.existsSync(webpackPath);
 
-      return (
-        webpackFileExists
-          ? webpackPath
-          : `./${path}`
-      );
+        return (
+            webpackFileExists
+                ? webpackPath
+                : `./${path}`
+        );
     }
 
     /**
@@ -148,7 +163,7 @@ class StateMachineExecutor {
      * @param {object} stateInfo
      */
     whatToRun(stateInfo, input, outputKey, callback) {
-        switch(stateInfo.Type) {
+        switch (stateInfo.Type) {
             case 'Task':
                 // TODO: catch, retry
                 // This will spin up a node child process to fire off the handler function of the given lambda
@@ -198,7 +213,7 @@ class StateMachineExecutor {
         if ((stateInfo.Seconds && _.isNaN(+stateInfo.Seconds))) {
             milliseconds = +stateInfo.Seconds * 1000
         } else if (stateInfo.SecondsPath && input) {
-            milliseconds = +jsonPath({ json: input, path: stateInfo.SecondsPath })[0] * 1000;
+            milliseconds = +jsonPath({json: input, path: stateInfo.SecondsPath})[0] * 1000;
         } else if (stateInfo.Timestamp) {
             const waitDate = new Date(stateInfo.Timestamp);
             if (waitDate.getTime() < Date.now()) {
@@ -207,7 +222,7 @@ class StateMachineExecutor {
                 milliseconds = waitDate.getTime() - Date.now();
             }
         } else if (stateInfo.TimestampPath && input) {
-            const waitDate = new Date(jsonPath({ json: input, path: stateInfo.TimestampPath })[0]);
+            const waitDate = new Date(jsonPath({json: input, path: stateInfo.TimestampPath})[0]);
             if (waitDate.getTime() < Date.now()) {
                 milliseconds = 0;
             } else {
@@ -216,11 +231,21 @@ class StateMachineExecutor {
         }
 
         if (_.isNaN(milliseconds)) {
-            return ''+ this.endStateMachine(
+            return '' + this.endStateMachine(
                 new StateRunTimeError('Specified wait time is not a number'), stateInfo);
         }
 
         return `setTimeout(() => {}, ${+milliseconds});`;
+    }
+
+    //TODO: check if task (lambda) input is the same concept as state input
+    //TODO: first apply input path filtering, then parameter filtering. They're not mutually exclusive
+    processTaskInput(input, stateInfo) {
+        if (typeof stateInfo.Parameters !== 'undefined') {
+            return this.processTaskInputParameters(input, stateInfo);
+        } else {
+            return this.processTaskInputPath(input, stateInfo);
+        }
     }
 
     /**
@@ -239,10 +264,42 @@ class StateMachineExecutor {
             input = {};
         } else {
             input = input ? input : {};
-            jsonPath({ json: input, path: stateInfo.InputPath, callback: (data) => {
-                input = Object.assign({}, data);
-            }});
+            jsonPath({
+                json: input, path: stateInfo.InputPath, callback: (data) => {
+                    input = Object.assign({}, data);
+                }
+            });
         }
+
+        return input;
+    }
+
+    /**
+     * Use "Parameters" field to create a collection of key-value pairs that are passed as input.
+     * The values of each can either be static values that you include in your state machine definition,
+     * or selected from either the input or the context object with a path.
+     * For key-value pairs where the value is selected using a path, the key name must end in .$.
+     * https://docs.aws.amazon.com/step-functions/latest/dg/input-output-inputpath-params.html
+     *
+     * This function cannot not with nested complex types as "target" path
+     * nor can it deal with static values (yet)
+     * TODO: static values
+     * TODO: nested target paths (complex target types)
+     * @param input
+     * @param StateInfo
+     */
+    processTaskInputParameters(input, StateInfo) {
+        let newInput = {};
+        //Selectively grab data from input
+        for (let [targetPath, sourcePath] of Object.entries(StateInfo.Parameters)) {
+            jsonPath({
+                json: input, path: sourcePath, callback: (data) => {
+                    this.addDataToInput(newInput, targetPath, data);
+                }
+            });
+        }
+
+        return Object.assign({}, newInput);
     }
 
     /**
@@ -257,10 +314,22 @@ class StateMachineExecutor {
     processTaskResultPath(input, stateInfo, resultData) {
         const path = typeof stateInfo.ResultPath === 'undefined' ? '$' : stateInfo.ResultPath;
 
+        return this.addDataToInput(input, path, resultData);
+    }
+
+    addDataToInput(input, path, data) {
         let exprList = jsonPath.toPathArray(path);
-        if (exprList[0] === '$' && exprList.length > 1) {exprList.shift();}
-        let resultObject = resultData;
-        exprList.reduceRight((_, item) => {let temp = {}; temp[item] = resultObject; resultObject = Object.assign({}, temp);}, null);
+        if (exprList[0] === '$' && exprList.length > 1) {
+            exprList.shift();
+        }
+        let resultObject = data;
+        exprList.reduceRight((_, item) => {
+            if (item !== '$') {
+                let temp = {};
+                temp[item] = resultObject;
+                resultObject = Object.assign({}, temp);
+            }
+        }, null);
 
         return Object.assign(input, resultObject);
     }
@@ -279,7 +348,7 @@ class StateMachineExecutor {
     processTaskOutputPath(data, path) {
         let output = null;
         if (path !== null) {
-            output = jsonPath({ json: data, path: path || '$', })[0];
+            output = jsonPath({json: data, path: path || '$',})[0];
 
             if (!output) {
                 return this.endStateMachine(
